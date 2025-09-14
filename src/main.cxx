@@ -18,6 +18,25 @@ using json=nlohmann::json;
 
 typedef std::filesystem::path path;
 
+[[nodiscard]] constexpr std::vector<std::string> darc_filters();
+[[nodiscard]] const path iwad_dialog();
+[[nodiscard]] const path single_pwad_dialog();
+[[nodiscard]] const std::vector<path> pwad_dialog();
+void add_pwad(const path& rootdir);
+void add_iwad(const path& rootdir);
+void launch_doom(const path& rootdir, const path& instance_path,
+		const bool close_on_launch);
+const std::vector<path> list_instances(const path& rootdir);
+const std::vector<path> list_iwads(const path& rootdir);
+const std::vector<std::pair<path, bool>> list_available_pwads(const path& rootdir);
+const char* path_string_getter(void* data, int index);
+void load_instance(const path& instance_path,
+		path& iwad_path, std::vector<path>& pwad_paths);
+void save_instance(const path& rootdir, char* instance_name,
+		const path& iwad_path, const std::vector<path>& pwad_paths);
+void delete_instance(const path& instance_path);
+
+
 [[nodiscard]] constexpr std::vector<std::string> darc_filters() {
 	return {"Doom Archives", "*.wad *.WAD *.pk3 *.PK3"};
 }
@@ -59,21 +78,29 @@ void add_iwad(const path& rootdir) {
 	std::filesystem::copy_file(iwad_path, rootdir / "iwads" / iwad_path.filename());
 }
 
-void launch_doom(
-		const path& rootdir, const path& iwad_path,
-		const std::vector<path>& pwad_paths,
+void launch_doom(const path& rootdir, const path& instance_path,
 		const bool close_on_launch) {
-	if (iwad_path.empty()) return;
+	if (!std::filesystem::exists(instance_path)) return;
 	if (fork() == 0) {
-		const std::size_t argc = 5+pwad_paths.size();
+		std::vector<path> pwad_paths;
+		path iwad_path;
+		load_instance(instance_path, iwad_path, pwad_paths);
+		path save_path = instance_path / "save";
+		path config_path = instance_path / "config";
+
+		const std::size_t argc = 9+pwad_paths.size();
 		const char** argv = new const char*[argc];
 		argv[0] = "/usr/bin/gzdoom";
 		argv[1] = "-iwad",
 		argv[2] = iwad_path.c_str();
-		argv[3] = "-file",
-		argv[pwad_paths.size()+4] = nullptr;
+		argv[3] = "-savedir";
+		argv[4] = save_path.c_str();
+		argv[5] = "-config";
+		argv[6] = config_path.c_str();
+		argv[7] = "-file",
+		argv[pwad_paths.size()+8] = nullptr;
 		for (std::size_t i = 0; i < pwad_paths.size(); i++)
-			argv[i+4] = pwad_paths[i].c_str();
+			argv[i+8] = pwad_paths[i].c_str();
 
 		auto now = std::chrono::system_clock::now();
 		std::time_t now_time = std::chrono::system_clock::to_time_t(now);
@@ -91,12 +118,12 @@ void launch_doom(
 	}
 }
 
-const std::vector<path> list_configs(const path& rootdir) {
-	std::filesystem::directory_iterator dir_iter(rootdir / "configs");
-	std::vector<path> available_config_paths{};
-	for (path config_path : dir_iter)
-		available_config_paths.push_back(config_path);
-	return available_config_paths;
+const std::vector<path> list_instances(const path& rootdir) {
+	std::filesystem::directory_iterator dir_iter(rootdir / "instances");
+	std::vector<path> available_instance_paths{};
+	for (path instance_path : dir_iter)
+		available_instance_paths.push_back(instance_path);
+	return available_instance_paths;
 }
 
 const std::vector<path> list_iwads(const path& rootdir) {
@@ -118,16 +145,16 @@ const std::vector<std::pair<path, bool>> list_available_pwads(const path& rootdi
 const char* path_string_getter(void* data, int index) {
 	path* paths = (path*)data;
 	path& path_selected = paths[index];
-	std::ptrdiff_t offset = path_selected.string().length() - path_selected.filename().string().length();
+	std::ptrdiff_t offset = path_selected.string().length() -
+		path_selected.filename().string().length();
 	return path_selected.c_str() + offset;
 }
 
-void load_config(
-		const path& config_path, path& iwad_path,
-		std::vector<path>& pwad_paths) {
-	if (!std::filesystem::exists(config_path)) return;
+void load_instance(const path& instance_path,
+		path& iwad_path, std::vector<path>& pwad_paths) {
+	if (!std::filesystem::exists(instance_path)) return;
 
-	std::ifstream i(config_path);
+	std::ifstream i(instance_path / "config.json");
 	json j;
 	i >> j;
 	if (j.contains("iwad_path") && j["iwad_path"].is_string()
@@ -145,24 +172,27 @@ void load_config(
 	i.close();
 }
 
-void save_config(
-		const path& rootdir, char* config_name,
+void save_instance(const path& rootdir, char* instance_name,
 		const path& iwad_path, const std::vector<path>& pwad_paths) {
 	if (!std::filesystem::exists(rootdir)) return;
-	if (!std::filesystem::exists(rootdir / "configs")) return;
+	if (!std::filesystem::exists(rootdir / "instances")) return;
 	
-	path config_path = rootdir / "configs" / config_name;
-	if (std::filesystem::exists(config_path)) {
+	path instance_path = rootdir / "instances" / instance_name;
+	if (std::filesystem::exists(instance_path)) {
 		pfd::message overwrite("WARNING!",
-				"Really overwrite config " +
-				config_path.filename().string() + "? This is not reversible!",
+				"Really overwrite instance " +
+				instance_path.filename().string() + "? This is not reversible!",
 				pfd::choice::ok_cancel, pfd::icon::warning);
 		if (overwrite.result() != pfd::button::ok) return;
+	} else {
+		std::filesystem::create_directory(rootdir / "instances" / instance_name);
+		std::filesystem::create_directory(rootdir / "instances" / instance_name / "save");
+		std::filesystem::create_directory(rootdir / "instances" / instance_name / "instance");
 	}
 
-	std::ofstream o(rootdir / "configs" / config_name);
+	std::ofstream o(rootdir / "instances" / instance_name / "config.json");
 	if (!o.is_open()) {
-		std::cout << "couldnt open " << rootdir/config_name
+		std::cout << "couldnt open " << rootdir/instance_name
 			<< " in ostream to save" << std::endl;
 		return;
 	}
@@ -178,14 +208,14 @@ void save_config(
 	o.close();
 }
 
-void delete_config(const path& config_path) {
-	if (!std::filesystem::exists(config_path)) return;
+void delete_instance(const path& instance_path) {
+	if (!std::filesystem::exists(instance_path)) return;
 	pfd::message message("WARNING!",
 			"Really delete " +
-			config_path.filename().string() + "? This is not reversible!",
+			instance_path.filename().string() + "? This is not reversible!",
 			pfd::choice::ok_cancel, pfd::icon::warning);
 	if (message.result() != pfd::button::ok) return;
-	std::filesystem::remove(config_path);
+	std::filesystem::remove_all(instance_path);
 }
 
 int main(int argc, char** argv) {
@@ -207,6 +237,7 @@ int main(int argc, char** argv) {
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 			DEFAULT_WIN_SIZE_X, DEFAULT_WIN_SIZE_Y,
 			window_flags);
+	SDL_SetWindowMinimumSize(window, MIN_WIN_SIZE_X, MIN_WIN_SIZE_Y);
 	SDL_GLContext gl_context = SDL_GL_CreateContext(window);
 	SDL_GL_MakeCurrent(window, gl_context);
 	if (SDL_GL_SetSwapInterval(-1) == -1) SDL_GL_SetSwapInterval(1);
@@ -234,8 +265,8 @@ int main(int argc, char** argv) {
 		std::filesystem::create_directory(rootdir);
 	if (!std::filesystem::exists(rootdir / "pwads"))
 		std::filesystem::create_directory(rootdir / "pwads");
-	if (!std::filesystem::exists(rootdir / "configs"))
-		std::filesystem::create_directory(rootdir / "configs");
+	if (!std::filesystem::exists(rootdir / "instances"))
+		std::filesystem::create_directory(rootdir / "instances");
 	if (!std::filesystem::exists(rootdir / "iwads"))
 		std::filesystem::create_directory(rootdir / "iwads");
 	if (!std::filesystem::exists(rootdir / "logs"))
@@ -246,13 +277,13 @@ int main(int argc, char** argv) {
 	path iwad_path("");
 	std::vector<path> pwad_paths{};
 	std::vector<std::pair<path, bool>> available_pwad_paths = list_available_pwads(rootdir);
-	std::vector<path> available_config_paths = list_configs(rootdir);
+	std::vector<path> available_instance_paths = list_instances(rootdir);
 	std::vector<path> available_iwad_paths = list_iwads(rootdir);
 
-	char new_config_name[32];
+	char new_instance_name[32];
 
-	int last_config_index = -1;
-	int current_config_index = 0;
+	int last_instance_index = -1;
+	int current_instance_index = 0;
 	int current_iwad_index = 0;
 
 	bool close_on_launch = false;
@@ -279,35 +310,46 @@ int main(int argc, char** argv) {
 				ImGuiWindowFlags_NoDecoration |
 				ImGuiWindowFlags_NoResize);
 
-		ImGui::Text("Root Directory: %s", rootdir.c_str());
-		ImGui::ListBox("Config List", &current_config_index, path_string_getter,
-				available_config_paths.data(), available_config_paths.size());
-		if (ImGui::Button("Refresh Config List"))
-			available_config_paths = list_configs(rootdir);
-		if (ImGui::Button("Load Config")) {
-			load_config(available_config_paths[current_config_index], iwad_path, pwad_paths);
-			available_config_paths = list_configs(rootdir);
+		ImVec2 size = ImGui::GetContentRegionAvail();
+		size.y -= ImGui::GetTextLineHeightWithSpacing();
+		ImGui::BeginTable("##", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg,
+				size);
+
+		ImGui::TableNextColumn();
+		ImGui::Text("Instance Manager");
+		ImGui::Spacing();
+
+		ImGui::ListBox("Instances", &current_instance_index, path_string_getter,
+				available_instance_paths.data(), available_instance_paths.size());
+		if (ImGui::Button("Refresh"))
+			available_instance_paths = list_instances(rootdir);
+		if (ImGui::Button("Load")) {
+			load_instance(available_instance_paths[current_instance_index],
+					iwad_path, pwad_paths);
+			available_instance_paths = list_instances(rootdir);
 		}
-		if (current_config_index != last_config_index) {
-			path selected_config_path = available_config_paths[current_config_index];
-			std::ptrdiff_t offset = selected_config_path.string().length() -
-				selected_config_path.filename().string().length();
-			memset(new_config_name, 0, 32ul); 
-			strncpy(new_config_name, selected_config_path.c_str() + offset,
-					std::min(selected_config_path.filename().string().length(), 31ul));
-			last_config_index = current_config_index;
+		if (current_instance_index != last_instance_index) {
+			path selected_instance_path = available_instance_paths[current_instance_index];
+			std::ptrdiff_t offset = selected_instance_path.string().length() -
+				selected_instance_path.filename().string().length();
+			memset(new_instance_name, 0, 32ul); 
+			strncpy(new_instance_name, selected_instance_path.c_str() + offset,
+					std::min(selected_instance_path.filename().string().length(), 31ul));
+			last_instance_index = current_instance_index;
 		}
-		ImGui::InputText("Config Save Name", new_config_name, 31ul);
-		if (ImGui::Button("Save Config")) {
-			save_config(rootdir, new_config_name, iwad_path, pwad_paths);
-			available_config_paths = list_configs(rootdir);
+		ImGui::InputText("New Name", new_instance_name, 31ul);
+		if (ImGui::Button("Save")) {
+			save_instance(rootdir, new_instance_name, iwad_path, pwad_paths);
+			available_instance_paths = list_instances(rootdir);
 		}
-		if (ImGui::Button("Delete Config")) {
-			delete_config(available_config_paths[current_config_index]);
-			available_config_paths = list_configs(rootdir);
+		if (ImGui::Button("Delete")) {
+			delete_instance(available_instance_paths[current_instance_index]);
+			available_instance_paths = list_instances(rootdir);
 		}
 
-		ImGui::NewLine();
+		ImGui::TableNextColumn();
+		ImGui::Text("Instance Editor");
+		ImGui::Spacing();
 
 		ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
 				ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV |
@@ -317,7 +359,7 @@ int main(int argc, char** argv) {
 			ImGui::TableSetColumnIndex(0);
 			ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
 			ImGui::TableSetColumnIndex(1);
-			ImGui::Checkbox("Active", &available_pwad_paths[i].second);
+			ImGui::Checkbox("##", &available_pwad_paths[i].second);
 		}
 		ImGui::EndTable();
 
@@ -364,7 +406,8 @@ int main(int argc, char** argv) {
 
 		std::ptrdiff_t iwad_offset = iwad_path.string().length() -
 			iwad_path.filename().string().length();
-		ImGui::Text("Active IWAD: %s", iwad_path.empty() ? "<unset>" : iwad_path.c_str() + iwad_offset);
+		ImGui::Text("Active IWAD: %s",
+				iwad_path.empty() ? "<unset>" : iwad_path.c_str() + iwad_offset);
 		ImGui::Text("Active PWADs:");
 		for (path pwad_path : pwad_paths) {
 			std::ptrdiff_t pwad_offset = pwad_path.string().length() -
@@ -372,11 +415,18 @@ int main(int argc, char** argv) {
 			ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
 		}
 
-		ImGui::NewLine();
+		ImGui::TableNextColumn();
+		ImGui::Text("Launcher");
+		ImGui::Spacing();
 
 		ImGui::Checkbox("Close Instancer on Launch", &close_on_launch);
 		if (ImGui::Button("Launch GZDoom"))
-			launch_doom(rootdir, iwad_path, pwad_paths, close_on_launch);
+			launch_doom(rootdir, available_instance_paths[current_instance_index],
+					close_on_launch);
+
+		ImGui::EndTable();
+
+		ImGui::Text("Developed as FOSS by Template (@timerunner16). Thanks for using!");
 
 		ImGui::End();
 		ImGui::PopStyleVar(1);

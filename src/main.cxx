@@ -357,17 +357,18 @@ int main(int argc, char** argv) {
 
 		ImGui::TableNextColumn();
 
-		ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
+		if (ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
 				ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV |
-				ImGuiTableFlags_NoHostExtendX);
-		for (std::size_t i = 0; i < available_pwad_paths.size(); i++) {
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
-			ImGui::TableSetColumnIndex(1);
-			ImGui::Checkbox("##", &available_pwad_paths[i].second);
+				ImGuiTableFlags_NoHostExtendX)) {
+			for (std::size_t i = 0; i < available_pwad_paths.size(); i++) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Checkbox("##", &available_pwad_paths[i].second);
+			}
+			ImGui::EndTable();
 		}
-		ImGui::EndTable();
 
 		if (ImGui::Button("Refresh PWAD List"))
 			available_pwad_paths = list_available_pwads(rootdir);

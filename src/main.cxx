@@ -22,10 +22,11 @@ typedef std::filesystem::path path;
 [[nodiscard]] const path iwad_dialog();
 [[nodiscard]] const path single_pwad_dialog();
 [[nodiscard]] const std::vector<path> pwad_dialog();
+[[nodiscard]] const path gzdoom_dialog();
 void add_pwad(const path& rootdir);
 void add_iwad(const path& rootdir);
 void launch_doom(const path& rootdir, const path& instance_path,
-		const bool close_on_launch);
+		const path& gzdoom_path, const bool close_on_launch);
 const std::vector<path> list_instances(const path& rootdir);
 const std::vector<path> list_iwads(const path& rootdir);
 const std::vector<std::pair<path, bool>> list_available_pwads(const path& rootdir);
@@ -67,6 +68,14 @@ void delete_instance(const path& instance_path);
 	return pwads;
 }
 
+[[nodiscard]] const path gzdoom_dialog() {
+	pfd::open_file file_selector("Select GZDoom Executable", ".",
+			{"All Files", "*"}, pfd::opt::none);
+	const std::vector<std::string> result = file_selector.result();
+	if (result.empty()) return path("");
+	return path(result[0]);
+}
+
 void add_pwad(const path& rootdir) {
 	std::vector<path> pwad_paths = pwad_dialog();
 	for (path pwad_path : pwad_paths)
@@ -79,8 +88,11 @@ void add_iwad(const path& rootdir) {
 }
 
 void launch_doom(const path& rootdir, const path& instance_path,
-		const bool close_on_launch) {
+		const path& gzdoom_path, const bool close_on_launch) {
 	if (!std::filesystem::exists(instance_path)) return;
+	if (!std::filesystem::is_directory(instance_path)) return;
+	if (!std::filesystem::exists(gzdoom_path)) return;
+	if (std::filesystem::is_directory(gzdoom_path)) return;
 	if (fork() == 0) {
 		std::vector<path> pwad_paths;
 		path iwad_path;
@@ -90,7 +102,7 @@ void launch_doom(const path& rootdir, const path& instance_path,
 
 		const std::size_t argc = 9+pwad_paths.size();
 		const char** argv = new const char*[argc];
-		argv[0] = "/usr/bin/gzdoom";
+		argv[0] = gzdoom_path.c_str();
 		argv[1] = "-iwad",
 		argv[2] = iwad_path.c_str();
 		argv[3] = "-savedir";
@@ -112,7 +124,7 @@ void launch_doom(const path& rootdir, const path& instance_path,
 				S_IRUSR | S_IWUSR);
 		dup2(fd, STDOUT_FILENO);
 
-		execvp("gzdoom", const_cast<char* const*>(argv));
+		execvp(gzdoom_path.c_str(), const_cast<char* const*>(argv));
 	} else if (close_on_launch) {
 		exit(EXIT_SUCCESS);
 	}
@@ -284,6 +296,11 @@ int main(int argc, char** argv) {
 	std::vector<std::pair<path, bool>> available_pwad_paths = list_available_pwads(rootdir);
 	std::vector<path> available_instance_paths = list_instances(rootdir);
 	std::vector<path> available_iwad_paths = list_iwads(rootdir);
+	#ifdef WIN32
+	path gzdoom_path = "";
+	#else
+	path gzdoom_path = "/usr/bin/gzdoom";
+	#endif
 
 	char new_instance_name[32];
 
@@ -425,9 +442,15 @@ int main(int argc, char** argv) {
 		ImGui::TableNextColumn();
 
 		ImGui::Checkbox("Close Instancer on Launch", &close_on_launch);
-		if (ImGui::Button("Launch GZDoom"))
+		std::string button_name = std::string("Launch ") +
+			available_instance_paths[current_instance_index].filename().string();
+		if (ImGui::Button("Set GZDoom Path"))
+			gzdoom_path = gzdoom_dialog();
+		ImGui::TextWrapped("GZDoom Path: %s",
+				gzdoom_path.empty() ? "<unset>" : gzdoom_path.c_str());
+		if (ImGui::Button(button_name.c_str()))
 			launch_doom(rootdir, available_instance_paths[current_instance_index],
-					close_on_launch);
+					gzdoom_path, close_on_launch);
 
 		ImGui::EndTable();
 

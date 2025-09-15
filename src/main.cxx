@@ -123,6 +123,7 @@ const std::vector<path> list_instances(const path& rootdir) {
 	std::vector<path> available_instance_paths{};
 	for (path instance_path : dir_iter)
 		available_instance_paths.push_back(instance_path);
+	std::sort(available_instance_paths.begin(), available_instance_paths.end());
 	return available_instance_paths;
 }
 
@@ -131,6 +132,7 @@ const std::vector<path> list_iwads(const path& rootdir) {
 	std::vector<path> available_iwad_paths{};
 	for (path iwad_path : dir_iter)
 		available_iwad_paths.push_back(iwad_path);
+	std::sort(available_iwad_paths.begin(), available_iwad_paths.end());
 	return available_iwad_paths;
 }
 
@@ -139,6 +141,9 @@ const std::vector<std::pair<path, bool>> list_available_pwads(const path& rootdi
 	std::vector<std::pair<path, bool>> pwad_paths{};
 	for (path pwad_path : dir_iter)
 		pwad_paths.push_back(std::make_pair(pwad_path, false));
+	std::sort(pwad_paths.begin(), pwad_paths.end(), [](auto a, auto b) -> bool {
+		return a.first < b.first;
+	});
 	return pwad_paths;
 }
 
@@ -312,12 +317,15 @@ int main(int argc, char** argv) {
 
 		ImVec2 size = ImGui::GetContentRegionAvail();
 		size.y -= ImGui::GetTextLineHeightWithSpacing();
-		ImGui::BeginTable("##", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg,
+		ImGui::BeginTable("##", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
 				size);
+		ImGui::TableSetupColumn("Instance Manager");
+		ImGui::TableSetupColumn("Instance Editor");
+		ImGui::TableSetupColumn("Game Launcher");
+		ImGui::TableHeadersRow();
 
 		ImGui::TableNextColumn();
-		ImGui::Text("Instance Manager");
-		ImGui::Spacing();
 
 		ImGui::ListBox("Instances", &current_instance_index, path_string_getter,
 				available_instance_paths.data(), available_instance_paths.size());
@@ -348,8 +356,6 @@ int main(int argc, char** argv) {
 		}
 
 		ImGui::TableNextColumn();
-		ImGui::Text("Instance Editor");
-		ImGui::Spacing();
 
 		ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
 				ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV |
@@ -416,8 +422,6 @@ int main(int argc, char** argv) {
 		}
 
 		ImGui::TableNextColumn();
-		ImGui::Text("Launcher");
-		ImGui::Spacing();
 
 		ImGui::Checkbox("Close Instancer on Launch", &close_on_launch);
 		if (ImGui::Button("Launch GZDoom"))
@@ -426,7 +430,8 @@ int main(int argc, char** argv) {
 
 		ImGui::EndTable();
 
-		ImGui::Text("Developed as FOSS by Template (@timerunner16). Thanks for using!");
+		ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
+				"Thanks for using!");
 
 		ImGui::End();
 		ImGui::PopStyleVar(1);

@@ -14,6 +14,8 @@
 #include "guiconf.h"
 #include "unistd.h"
 #include "portable-file-dialogs.h"
+#include <curl/curl.h>
+#include <zip.h>
 using json=nlohmann::json;
 
 typedef std::filesystem::path path;
@@ -25,6 +27,7 @@ typedef std::filesystem::path path;
 [[nodiscard]] const path gzdoom_dialog();
 void add_pwad(const path& rootdir);
 void add_iwad(const path& rootdir);
+void download_idgames(const path& rootdir, std::string file);
 void launch_doom(const path& rootdir, const path& instance_path,
 		const path& gzdoom_path, const bool close_on_launch);
 const std::vector<path> list_instances(const path& rootdir);
@@ -85,6 +88,49 @@ void add_pwad(const path& rootdir) {
 void add_iwad(const path& rootdir) {
 	path iwad_path = iwad_dialog();
 	std::filesystem::copy_file(iwad_path, rootdir / "iwads" / iwad_path.filename());
+}
+
+void download_idgames(const path& rootdir, std::string file) {
+	CURL* curl = curl_easy_init();
+	if (!curl) return;
+	CURLcode res;
+	std::string destination =
+		std::string("https://www.quaddicted.com/files/idgames/") + file;
+	path temp_output = rootdir / "downloads/temp.zip";
+	curl_easy_setopt(curl, CURLOPT_URL, destination.c_str());
+	FILE* fd = fopen(temp_output.c_str(), "wb");
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fd);
+	res = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
+	fclose(fd);
+
+	pfd::notify notify("IDGames Download",
+			"PWAD Download finished, beginning install.", pfd::icon::info);
+	notify.ready();
+
+	int err;
+	zip_t* z = zip_open(temp_output.c_str(), ZIP_RDONLY, &err);
+	zip_stat_t sb;
+	
+	std::string name = path(file).filename().replace_extension("").string();
+	std::string outname;
+
+	std::size_t i;
+	for (i = 0; i < zip_get_num_entries(z, 0); i++) {
+		if (zip_stat_index(z, i, 0, &sb) != 0) continue;
+		outname = std::string(sb.name);
+		if (outname.starts_with(name) && !outname.ends_with(".txt")) {
+			break;
+		}
+	}
+	char* contents = new char[sb.size];
+	zip_file* f = zip_fopen(z, sb.name, 0);
+	zip_fread(f, contents, sb.size);
+	zip_fclose(f);
+	zip_close(z);
+
+	std::ofstream(rootdir / "pwads" / outname).write(contents, sb.size);
+	std::filesystem::remove(temp_output);
 }
 
 void launch_doom(const path& rootdir, const path& instance_path,
@@ -297,12 +343,13 @@ int main(int argc, char** argv) {
 	std::vector<path> available_instance_paths = list_instances(rootdir);
 	std::vector<path> available_iwad_paths = list_iwads(rootdir);
 	#ifdef WIN32
-	path gzdoom_path = "";
+	path gzdoom_path("");
 	#else
-	path gzdoom_path = "/usr/bin/gzdoom";
+	path gzdoom_path("/usr/games/gzdoom");
 	#endif
 
 	char new_instance_name[32];
+	char current_idgames_file[64];
 
 	int last_instance_index = -1;
 	int current_instance_index = 0;
@@ -382,7 +429,8 @@ int main(int argc, char** argv) {
 				ImGui::TableSetColumnIndex(0);
 				ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
 				ImGui::TableSetColumnIndex(1);
-				ImGui::Checkbox("##", &available_pwad_paths[i].second);
+				std::string cbname = std::string("##") + std::to_string(i);
+				ImGui::Checkbox(cbname.c_str(), &available_pwad_paths[i].second);
 			}
 			ImGui::EndTable();
 		}
@@ -438,6 +486,12 @@ int main(int argc, char** argv) {
 				pwad_path.filename().string().length();
 			ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
 		}
+
+		ImGui::NewLine();
+
+		ImGui::InputText("IDGames File", current_idgames_file, 64);
+		if (ImGui::Button("Download PWAD"))
+			download_idgames(rootdir, std::string(current_idgames_file));
 
 		ImGui::TableNextColumn();
 

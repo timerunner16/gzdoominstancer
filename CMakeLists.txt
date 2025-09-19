@@ -26,6 +26,9 @@ target_link_libraries(doom_instancer PRIVATE SDL2::SDL2)
 find_package(CURL REQUIRED)
 target_link_libraries(doom_instancer PRIVATE CURL::libcurl)
 
+find_package(libzip REQUIRED)
+target_link_libraries(doom_instancer PRIVATE libzip::zip)
+
 set(OpenGL_GL_PREFERENCE "GLVND")
 find_package(OpenGL REQUIRED)
 target_link_libraries(doom_instancer PRIVATE OpenGL::GL)

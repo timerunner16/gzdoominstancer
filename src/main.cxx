@@ -36,7 +36,7 @@ const std::vector<std::pair<path, bool>> list_available_pwads(const path& rootdi
 const char* path_string_getter(void* data, int index);
 void load_instance(const path& instance_path,
 		path& iwad_path, std::vector<path>& pwad_paths);
-void save_instance(const path& rootdir, char* instance_name,
+void save_instance(const path& rootdir, const char* instance_name,
 		const path& iwad_path, const std::vector<path>& pwad_paths);
 void delete_instance(const path& instance_path);
 
@@ -220,6 +220,7 @@ void load_instance(const path& instance_path,
 	std::ifstream i(instance_path / "config.json");
 	json j;
 	i >> j;
+	iwad_path.clear();
 	if (j.contains("iwad_path") && j["iwad_path"].is_string()
 		&& std::filesystem::exists(path(j["iwad_path"]))) {
 		iwad_path = path(j["iwad_path"]);
@@ -235,7 +236,7 @@ void load_instance(const path& instance_path,
 	i.close();
 }
 
-void save_instance(const path& rootdir, char* instance_name,
+void save_instance(const path& rootdir, const char* instance_name,
 		const path& iwad_path, const std::vector<path>& pwad_paths) {
 	if (!std::filesystem::exists(rootdir)) return;
 	if (!std::filesystem::exists(rootdir / "instances")) return;
@@ -357,6 +358,8 @@ int main(int argc, char** argv) {
 
 	bool close_on_launch = false;
 
+	bool instance_editor_open = false;
+
 	while (running) {
 		SDL_Event event;
 		while (SDL_PollEvent(&event) > 0) {
@@ -381,135 +384,186 @@ int main(int argc, char** argv) {
 
 		ImVec2 size = ImGui::GetContentRegionAvail();
 		size.y -= ImGui::GetTextLineHeightWithSpacing();
-		ImGui::BeginTable("##", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
-				ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
-				size);
-		ImGui::TableSetupColumn("Instance Manager");
-		ImGui::TableSetupColumn("Instance Editor");
-		ImGui::TableSetupColumn("Game Launcher");
-		ImGui::TableHeadersRow();
 
-		ImGui::TableNextColumn();
+		if (!instance_editor_open) {
+			ImGui::BeginTable("##", 2, ImGuiTableFlags_BordersInnerV |
+					ImGuiTableFlags_RowBg |
+					ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
+					size);
+			ImGui::TableSetupColumn("Instance Manager");
+			ImGui::TableSetupColumn("Game Launcher");
+			ImGui::TableHeadersRow();
 
-		ImGui::ListBox("Instances", &current_instance_index, path_string_getter,
-				available_instance_paths.data(), available_instance_paths.size());
-		if (ImGui::Button("Refresh"))
-			available_instance_paths = list_instances(rootdir);
-		if (ImGui::Button("Load")) {
-			load_instance(available_instance_paths[current_instance_index],
-					iwad_path, pwad_paths);
-			available_instance_paths = list_instances(rootdir);
-		}
-		if (current_instance_index != last_instance_index) {
-			path selected_instance_path = available_instance_paths[current_instance_index];
-			std::ptrdiff_t offset = selected_instance_path.string().length() -
-				selected_instance_path.filename().string().length();
-			memset(new_instance_name, 0, 32ul); 
-			strncpy(new_instance_name, selected_instance_path.c_str() + offset,
-					std::min(selected_instance_path.filename().string().length(), 31ul));
-			last_instance_index = current_instance_index;
-		}
-		ImGui::InputText("New Name", new_instance_name, 31ul);
-		if (ImGui::Button("Save")) {
-			save_instance(rootdir, new_instance_name, iwad_path, pwad_paths);
-			available_instance_paths = list_instances(rootdir);
-		}
-		if (ImGui::Button("Delete")) {
-			delete_instance(available_instance_paths[current_instance_index]);
-			available_instance_paths = list_instances(rootdir);
-		}
+			ImGui::TableNextColumn();
 
-		ImGui::TableNextColumn();
-
-		if (ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
-				ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV |
-				ImGuiTableFlags_NoHostExtendX)) {
-			for (std::size_t i = 0; i < available_pwad_paths.size(); i++) {
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
-				ImGui::TableSetColumnIndex(1);
-				std::string cbname = std::string("##") + std::to_string(i);
-				ImGui::Checkbox(cbname.c_str(), &available_pwad_paths[i].second);
+			ImGui::ListBox("Instances", &current_instance_index, path_string_getter,
+					available_instance_paths.data(), available_instance_paths.size());
+			if (ImGui::Button("Refresh"))
+				available_instance_paths = list_instances(rootdir);
+			if (current_instance_index != last_instance_index) {
+				path selected_instance_path = 
+					available_instance_paths[current_instance_index];
+				std::ptrdiff_t offset = selected_instance_path.string().length() -
+					selected_instance_path.filename().string().length();
+				memset(new_instance_name, 0, 32ul); 
+				strncpy(new_instance_name, selected_instance_path.c_str() + offset,
+						std::min(selected_instance_path.filename().string().length(), 31ul));
+				last_instance_index = current_instance_index;
 			}
+			ImGui::InputText("New Name", new_instance_name, 31ul);
+			if (ImGui::Button("Duplicate (no save/conf yet)")) {
+				if (!std::filesystem::exists(rootdir / "instances" / new_instance_name)) {
+					load_instance(available_instance_paths[current_instance_index],
+							iwad_path, pwad_paths);
+					save_instance(rootdir, new_instance_name, iwad_path, pwad_paths);
+					available_instance_paths = list_instances(rootdir);
+				} else {
+					pfd::notify notify("ERROR!", "An instance already exists with this " \
+							"name. Aborting creation of new instance.", pfd::icon::error);
+					notify.ready();
+				}
+			}
+			if (ImGui::Button("New")) {
+				if (!std::filesystem::exists(rootdir / "instances" / new_instance_name)) {
+					save_instance(rootdir, new_instance_name, "", {});
+					available_instance_paths = list_instances(rootdir);
+					current_instance_index = std::distance(available_instance_paths.begin(),
+							std::find(available_instance_paths.begin(),
+							available_instance_paths.end(),
+							rootdir / "instances" / new_instance_name));
+				} else {
+					pfd::notify notify("ERROR!", "An instance already exists with this " \
+							"name. Aborting creation of new instance.", pfd::icon::error);
+					notify.ready();
+				}
+			}
+			if (ImGui::Button("Delete")) {
+				delete_instance(available_instance_paths[current_instance_index]);
+				available_instance_paths = list_instances(rootdir);
+			}
+			if (ImGui::Button("Edit")) {
+				load_instance(available_instance_paths[current_instance_index],
+						iwad_path, pwad_paths);
+				instance_editor_open = true;
+			}
+
+			ImGui::TableNextColumn();
+
+			ImGui::Checkbox("Close Instancer on Launch", &close_on_launch);
+			std::string button_name = std::string("Launch ") +
+				available_instance_paths[current_instance_index].filename().string();
+			if (ImGui::Button("Set GZDoom Path"))
+				gzdoom_path = gzdoom_dialog();
+			ImGui::TextWrapped("GZDoom Path: %s",
+					gzdoom_path.empty() ? "<unset>" : gzdoom_path.c_str());
+			if (ImGui::Button(button_name.c_str()))
+				launch_doom(rootdir, available_instance_paths[current_instance_index],
+						gzdoom_path, close_on_launch);
+
 			ImGui::EndTable();
-		}
 
-		if (ImGui::Button("Refresh PWAD List"))
-			available_pwad_paths = list_available_pwads(rootdir);
-		if (ImGui::Button("Add PWAD")) {
-			add_pwad(rootdir);
-			available_pwad_paths = list_available_pwads(rootdir);
-		}
-		if (ImGui::Button("Activate Selected PWADs")) {
-			for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
-				if (!available_pwad_path.second) continue;
-				if (std::find(pwad_paths.begin(), pwad_paths.end(),
-						available_pwad_path.first) != pwad_paths.end()) continue;
-				pwad_paths.push_back(available_pwad_path.first);
+			ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
+					"Thanks for using!");
+		} else {
+			ImGui::BeginTable("##", 1, ImGuiTableFlags_BordersInnerV |
+					ImGuiTableFlags_RowBg |
+					ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
+					size);
+			std::string name = std::string("Editing instance " +
+					available_instance_paths[current_instance_index].filename().string());
+			ImGui::TableSetupColumn(name.c_str());
+			ImGui::TableHeadersRow();
+
+			ImGui::TableNextColumn();
+
+			if (ImGui::BeginTable("PWADs", 2, ImGuiTableFlags_SizingFixedFit |
+					ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV |
+					ImGuiTableFlags_NoHostExtendX)) {
+				for (std::size_t i = 0; i < available_pwad_paths.size(); i++) {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::Text("%s", available_pwad_paths[i].first.filename().c_str());
+					ImGui::TableSetColumnIndex(1);
+					std::string cbname = std::string("##") + std::to_string(i);
+					ImGui::Checkbox(cbname.c_str(), &available_pwad_paths[i].second);
+				}
+				ImGui::EndTable();
 			}
-		}
-		if (ImGui::Button("Deactivate Selected PWADs")) {
-			for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
-				if (!available_pwad_path.second) continue;
-				auto find = std::find(pwad_paths.begin(), pwad_paths.end(),
-						available_pwad_path.first);
-				if (find == pwad_paths.end()) continue;
-				pwad_paths.erase(find);
+
+			if (ImGui::Button("Refresh PWAD List"))
+				available_pwad_paths = list_available_pwads(rootdir);
+			if (ImGui::Button("Add PWAD")) {
+				add_pwad(rootdir);
+				available_pwad_paths = list_available_pwads(rootdir);
 			}
+			if (ImGui::Button("Activate Selected PWADs")) {
+				for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
+					if (!available_pwad_path.second) continue;
+					if (std::find(pwad_paths.begin(), pwad_paths.end(),
+							available_pwad_path.first) != pwad_paths.end()) continue;
+					pwad_paths.push_back(available_pwad_path.first);
+				}
+			}
+			if (ImGui::Button("Deactivate Selected PWADs")) {
+				for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
+					if (!available_pwad_path.second) continue;
+					auto find = std::find(pwad_paths.begin(), pwad_paths.end(),
+							available_pwad_path.first);
+					if (find == pwad_paths.end()) continue;
+					pwad_paths.erase(find);
+				}
+			}
+
+			ImGui::NewLine();
+
+			ImGui::ListBox("IWAD List", &current_iwad_index, path_string_getter,
+					available_iwad_paths.data(), available_iwad_paths.size());
+			if (ImGui::Button("Refresh IWAD List"))
+				available_iwad_paths = list_iwads(rootdir);
+			if (ImGui::Button("Add IWAD")) {
+				add_iwad(rootdir);
+				available_iwad_paths = list_iwads(rootdir);
+			}
+			if (ImGui::Button("Activate Selected IWAD")) {
+				iwad_path = available_iwad_paths[current_iwad_index];
+				available_iwad_paths = list_iwads(rootdir);
+			}
+
+			ImGui::NewLine();
+
+			std::ptrdiff_t iwad_offset = iwad_path.string().length() -
+				iwad_path.filename().string().length();
+			ImGui::Text("Active IWAD: %s",
+					iwad_path.empty() ? "<unset>" : iwad_path.c_str() + iwad_offset);
+			ImGui::Text("Active PWADs:");
+			for (path pwad_path : pwad_paths) {
+				std::ptrdiff_t pwad_offset = pwad_path.string().length() -
+					pwad_path.filename().string().length();
+				ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
+			}
+
+			ImGui::NewLine();
+
+			ImGui::InputText("IDGames File", current_idgames_file, 64);
+			if (ImGui::Button("Download PWAD"))
+				download_idgames(rootdir, std::string(current_idgames_file));
+			
+			if (ImGui::Button("OK")) {
+					save_instance(rootdir,
+							available_instance_paths[current_instance_index].c_str(),
+							iwad_path, pwad_paths);
+				available_instance_paths = list_instances(rootdir);
+				instance_editor_open = false;
+			}
+
+			if (ImGui::Button("Cancel")) instance_editor_open = false;
+
+			ImGui::EndTable();
+
+			ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
+					"Thanks for using!");
+
 		}
-
-		ImGui::NewLine();
-
-		ImGui::ListBox("IWAD List", &current_iwad_index, path_string_getter,
-				available_iwad_paths.data(), available_iwad_paths.size());
-		if (ImGui::Button("Refresh IWAD List"))
-			available_iwad_paths = list_iwads(rootdir);
-		if (ImGui::Button("Add IWAD")) {
-			add_iwad(rootdir);
-			available_iwad_paths = list_iwads(rootdir);
-		}
-		if (ImGui::Button("Activate Selected IWAD")) {
-			iwad_path = available_iwad_paths[current_iwad_index];
-			available_iwad_paths = list_iwads(rootdir);
-		}
-
-		ImGui::NewLine();
-
-		std::ptrdiff_t iwad_offset = iwad_path.string().length() -
-			iwad_path.filename().string().length();
-		ImGui::Text("Active IWAD: %s",
-				iwad_path.empty() ? "<unset>" : iwad_path.c_str() + iwad_offset);
-		ImGui::Text("Active PWADs:");
-		for (path pwad_path : pwad_paths) {
-			std::ptrdiff_t pwad_offset = pwad_path.string().length() -
-				pwad_path.filename().string().length();
-			ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
-		}
-
-		ImGui::NewLine();
-
-		ImGui::InputText("IDGames File", current_idgames_file, 64);
-		if (ImGui::Button("Download PWAD"))
-			download_idgames(rootdir, std::string(current_idgames_file));
-
-		ImGui::TableNextColumn();
-
-		ImGui::Checkbox("Close Instancer on Launch", &close_on_launch);
-		std::string button_name = std::string("Launch ") +
-			available_instance_paths[current_instance_index].filename().string();
-		if (ImGui::Button("Set GZDoom Path"))
-			gzdoom_path = gzdoom_dialog();
-		ImGui::TextWrapped("GZDoom Path: %s",
-				gzdoom_path.empty() ? "<unset>" : gzdoom_path.c_str());
-		if (ImGui::Button(button_name.c_str()))
-			launch_doom(rootdir, available_instance_paths[current_instance_index],
-					gzdoom_path, close_on_launch);
-
-		ImGui::EndTable();
-
-		ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
-				"Thanks for using!");
 
 		ImGui::End();
 		ImGui::PopStyleVar(1);

@@ -282,6 +282,11 @@ void delete_instance(const path& instance_path) {
 	std::filesystem::remove_all(instance_path);
 }
 
+void duplicate_instance(const path& original_instance_path, const path& new_instance_path) {
+	std::filesystem::copy(original_instance_path, new_instance_path,
+			std::filesystem::copy_options::recursive);
+}
+
 int main(int argc, char** argv) {
 	SDL_Init(SDL_INIT_VIDEO);
 
@@ -411,30 +416,41 @@ int main(int argc, char** argv) {
 				last_instance_index = current_instance_index;
 			}
 			ImGui::InputText("New Name", new_instance_name, 31ul);
-			if (ImGui::Button("Duplicate (no save/conf yet)")) {
-				if (!std::filesystem::exists(rootdir / "instances" / new_instance_name)) {
-					load_instance(available_instance_paths[current_instance_index],
-							iwad_path, pwad_paths);
-					save_instance(rootdir, new_instance_name, iwad_path, pwad_paths);
+			if (ImGui::Button("Duplicate")) {
+				path new_instance_path = rootdir / "instances" / new_instance_name;
+				if (!std::filesystem::exists(new_instance_path)) {
+					duplicate_instance(available_instance_paths[current_instance_index],
+							new_instance_path);
 					available_instance_paths = list_instances(rootdir);
+					int new_instance_index = std::distance(available_instance_paths.begin(),
+							std::find(available_instance_paths.begin(),
+							available_instance_paths.end(),
+							new_instance_path));
+					if (new_instance_index < available_instance_paths.size())
+						current_instance_index = new_instance_index;
 				} else {
-					pfd::notify notify("ERROR!", "An instance already exists with this " \
-							"name. Aborting creation of new instance.", pfd::icon::error);
-					notify.ready();
+					pfd::message message("ERROR!", "An instance already exists with this " \
+							"name. Aborting creation of new instance.", pfd::choice::ok,
+							pfd::icon::error);
+					message.ready();
 				}
 			}
 			if (ImGui::Button("New")) {
-				if (!std::filesystem::exists(rootdir / "instances" / new_instance_name)) {
+				path new_instance_path = rootdir / "instances" / new_instance_name;
+				if (!std::filesystem::exists(new_instance_path)) {
 					save_instance(rootdir, new_instance_name, "", {});
 					available_instance_paths = list_instances(rootdir);
-					current_instance_index = std::distance(available_instance_paths.begin(),
+					int new_instance_index = std::distance(available_instance_paths.begin(),
 							std::find(available_instance_paths.begin(),
 							available_instance_paths.end(),
-							rootdir / "instances" / new_instance_name));
+							new_instance_path));
+					if (new_instance_index < available_instance_paths.size())
+						current_instance_index = new_instance_index;
 				} else {
-					pfd::notify notify("ERROR!", "An instance already exists with this " \
-							"name. Aborting creation of new instance.", pfd::icon::error);
-					notify.ready();
+					pfd::message message("ERROR!", "An instance already exists with this " \
+							"name. Aborting creation of new instance.", pfd::choice::ok,
+							pfd::icon::error);
+					message.ready();
 				}
 			}
 			if (ImGui::Button("Delete")) {

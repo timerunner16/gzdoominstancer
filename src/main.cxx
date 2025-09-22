@@ -21,6 +21,7 @@ using json=nlohmann::json;
 typedef std::filesystem::path path;
 
 [[nodiscard]] constexpr std::vector<std::string> darc_filters();
+[[nodiscard]] constexpr const char* signature();
 [[nodiscard]] const path iwad_dialog();
 [[nodiscard]] const path single_pwad_dialog();
 [[nodiscard]] const std::vector<path> pwad_dialog();
@@ -43,6 +44,10 @@ void delete_instance(const path& instance_path);
 
 [[nodiscard]] constexpr std::vector<std::string> darc_filters() {
 	return {"Doom Archives", "*.wad *.WAD *.pk3 *.PK3"};
+}
+
+[[nodiscard]] constexpr const char* signature() {
+	return "GZDoom Instancer is FOSS developed by @timerunner16.";
 }
 
 [[nodiscard]] const path iwad_dialog() {
@@ -478,8 +483,7 @@ int main(int argc, char** argv) {
 
 			ImGui::EndTable();
 
-			ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
-					"Thanks for using!");
+			ImGui::Text(signature());
 		} else {
 			ImGui::BeginTable("##", 1, ImGuiTableFlags_BordersInnerV |
 					ImGuiTableFlags_RowBg |
@@ -532,6 +536,21 @@ int main(int argc, char** argv) {
 
 			ImGui::NewLine();
 
+			ImGui::InputText("IDGames File", current_idgames_file, 64);
+			if (ImGui::Button("Download PWAD"))
+				download_idgames(rootdir, std::string(current_idgames_file));
+
+			ImGui::NewLine();
+
+			ImGui::Text("Active PWADs:");
+			for (path pwad_path : pwad_paths) {
+				std::ptrdiff_t pwad_offset = pwad_path.string().length() -
+					pwad_path.filename().string().length();
+				ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
+			}
+
+			ImGui::NewLine();
+
 			ImGui::ListBox("IWAD List", &current_iwad_index, path_string_getter,
 					available_iwad_paths.data(), available_iwad_paths.size());
 			if (ImGui::Button("Refresh IWAD List"))
@@ -551,18 +570,8 @@ int main(int argc, char** argv) {
 				iwad_path.filename().string().length();
 			ImGui::Text("Active IWAD: %s",
 					iwad_path.empty() ? "<unset>" : iwad_path.c_str() + iwad_offset);
-			ImGui::Text("Active PWADs:");
-			for (path pwad_path : pwad_paths) {
-				std::ptrdiff_t pwad_offset = pwad_path.string().length() -
-					pwad_path.filename().string().length();
-				ImGui::Text("\t%s", pwad_path.c_str() + pwad_offset);
-			}
 
 			ImGui::NewLine();
-
-			ImGui::InputText("IDGames File", current_idgames_file, 64);
-			if (ImGui::Button("Download PWAD"))
-				download_idgames(rootdir, std::string(current_idgames_file));
 			
 			if (ImGui::Button("OK")) {
 					save_instance(rootdir,
@@ -572,13 +581,13 @@ int main(int argc, char** argv) {
 				instance_editor_open = false;
 			}
 
+			ImGui::SameLine();
+
 			if (ImGui::Button("Cancel")) instance_editor_open = false;
 
 			ImGui::EndTable();
 
-			ImGui::Text("GZDoom Instancer is FOSS developed by Template (@timerunner16). " \
-					"Thanks for using!");
-
+			ImGui::Text(signature());
 		}
 
 		ImGui::End();

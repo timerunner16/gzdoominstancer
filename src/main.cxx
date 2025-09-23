@@ -144,6 +144,9 @@ void launch_doom(const path& rootdir, const path& instance_path,
 	if (!std::filesystem::is_directory(instance_path)) return;
 	if (!std::filesystem::exists(gzdoom_path)) return;
 	if (std::filesystem::is_directory(gzdoom_path)) return;
+	if (std::filesystem::perms::none == 
+			(std::filesystem::status(gzdoom_path).permissions() &
+			std::filesystem::perms::owner_exec)) return;
 	if (fork() == 0) {
 		std::vector<path> pwad_paths;
 		path iwad_path;

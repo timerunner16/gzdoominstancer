@@ -129,13 +129,31 @@ class GZDoomInstancer {
 
 		res = curl_easy_perform(curl);
 
-		if (res != CURLE_OK) return false;
+		if (res != CURLE_OK) {
+			free(chunk->data);
+			delete chunk;
+			curl_easy_cleanup(curl);
 
-		free(chunk->data);
-		delete chunk;
-		curl_easy_cleanup(curl);
+			return false;
+		}
 
-		return true;
+		std::string result = std::string(chunk->data);
+		try {
+			json j = json::parse(result);
+			std::cout << j.dump(4) << std::endl;
+
+			free(chunk->data);
+			delete chunk;
+			curl_easy_cleanup(curl);
+
+			return true;
+		} catch (std::exception e) {
+			free(chunk->data);
+			delete chunk;
+			curl_easy_cleanup(curl);
+
+			return false;
+		}
 	}
 
 	const std::vector<path> iga_getdirs() {

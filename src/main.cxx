@@ -39,14 +39,20 @@ class GZDoomInstancer {
 
 		iwad_path = "";
 		pwad_paths = {};
+		current_idgames_path = "";
 		available_pwad_paths = list_available_pwads();
 		available_instance_paths = list_instances();
 		available_iwad_paths = list_iwads();
+		if (iga_ping()) {
+			available_idgames_paths = iga_getdirs();
+		}
 		#ifdef WIN32
 		gzdoom_path = "";
 		#else
 		gzdoom_path = "/usr/games/gzdoom";
 		#endif
+		api_url = "https://www.doomworld.com/idgames/";
+		api_filename = "api/api.php";
 	}
 
 	[[nodiscard]] constexpr std::vector<std::string> darc_filters() {
@@ -94,15 +100,108 @@ class GZDoomInstancer {
 		std::filesystem::copy_file(iwad_path, rootdir / "iwads" / iwad_path.filename());
 	}
 
-	void download_idgames() {
-		std::string file(current_idgames_file);
+	static std::size_t write_memory_cb(void* contents, std::size_t size, std::size_t nmemb,
+			void* userp) {
+		std::size_t realsize = size*nmemb;
+		memory_chunk* mem = (memory_chunk*)userp;
+		char* ptr = (char*)realloc(mem->data, mem->size + realsize + 1);
+		if (!ptr) {
+			std::cout << "Not enough memory\n" << std::endl;
+			return 0;
+		}
+
+		mem->data = ptr;
+		memcpy(&(mem->data[mem->size]), contents, realsize);
+		mem->size += realsize;
+		mem->data[mem->size] = 0;
+
+		return realsize;
+	}
+
+	const bool iga_ping() {
+		CURL* curl = curl_easy_init();
+		if (!curl) return false;
+		CURLcode res;
+
+		memory_chunk* chunk;
+		std::string full_url = api_url + api_filename + "?action=ping&out=json";
+		iga_prepare_curl(full_url.c_str(), curl, &chunk);
+
+		res = curl_easy_perform(curl);
+
+		if (res != CURLE_OK) return false;
+
+		free(chunk->data);
+		delete chunk;
+		curl_easy_cleanup(curl);
+
+		return true;
+	}
+
+	const std::vector<path> iga_getdirs() {
+		CURL* curl = curl_easy_init();
+		if (!curl) return {};
+		CURLcode res;
+
+		memory_chunk* chunk;
+		std::string full_url = api_url + api_filename + "?action=getdirs&out=json&name=" +
+			current_idgames_path.string();
+		iga_prepare_curl(full_url.c_str(), curl, &chunk);
+
+		res = curl_easy_perform(curl);
+
+		if (res != CURLE_OK) return {};
+		std::string result = std::string(chunk->data);
+		json j = json::parse(result);
+
+		free(chunk->data);
+		delete chunk;
+		curl_easy_cleanup(curl);
+
+		if (!j.contains("content")) return {};
+		std::vector<path> paths{};
+		for (json result : j["content"]["dir"]) {
+			paths.push_back(result["name"]);
+		}
+		return paths;
+	}
+
+	const std::vector<path> iga_getfiles() {
+		CURL* curl = curl_easy_init();
+		if (!curl) return {};
+		CURLcode res;
+
+		memory_chunk* chunk;
+		std::string full_url = api_url + api_filename + "?action=getfiles&out=json&name=" +
+			current_idgames_path.c_str();
+		iga_prepare_curl(full_url.c_str(), curl, &chunk);
+
+		res = curl_easy_perform(curl);
+
+		if (res != CURLE_OK) return {};
+		std::string result = std::string(chunk->data);
+		json j = json::parse(result);
+
+		free(chunk->data);
+		delete chunk;
+		curl_easy_cleanup(curl);
+
+		if (!j.contains("content")) return {};
+		std::vector<path> paths{};
+		for (json result : j["content"]["file"]) {
+			paths.push_back(path(result["dir"]) / path(result["filename"]));
+		}
+		return paths;
+	}
+
+	void iga_downloadfile(path filename) {
 		CURL* curl = curl_easy_init();
 		if (!curl) return;
 		CURLcode res;
-		std::string destination =
-			std::string("https://www.quaddicted.com/files/idgames/") + file;
+		path target =
+			"https://www.quaddicted.com/files/idgames" / filename;
 		path temp_output = rootdir / "downloads/temp.zip";
-		curl_easy_setopt(curl, CURLOPT_URL, destination.c_str());
+		curl_easy_setopt(curl, CURLOPT_URL, target.c_str());
 		FILE* fd = fopen(temp_output.c_str(), "wb");
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, fd);
 		res = curl_easy_perform(curl);
@@ -115,26 +214,28 @@ class GZDoomInstancer {
 
 		int err;
 		zip_t* z = zip_open(temp_output.c_str(), ZIP_RDONLY, &err);
-		zip_stat_t sb;
 		
-		std::string name = path(file).filename().replace_extension("").string();
-		std::string outname;
+		std::string name = filename.filename().replace_extension("").string();
 
-		std::size_t i;
-		for (i = 0; i < zip_get_num_entries(z, 0); i++) {
+		for (std::size_t i = 0; i < zip_get_num_entries(z, 0); i++) {
+			zip_stat_t sb;
+			zip_stat_init(&sb);
 			if (zip_stat_index(z, i, 0, &sb) != 0) continue;
-			outname = std::string(sb.name);
-			if (outname.starts_with(name) && !outname.ends_with(".txt")) {
-				break;
-			}
-		}
-		char* contents = new char[sb.size];
-		zip_file* f = zip_fopen(z, sb.name, 0);
-		zip_fread(f, contents, sb.size);
-		zip_fclose(f);
-		zip_close(z);
+			std::string outname = std::string(sb.name);
 
-		std::ofstream(rootdir / "pwads" / outname).write(contents, sb.size);
+			if (outname.ends_with(".txt")) continue;
+
+			char* contents = new char[sb.size];
+			zip_file* f = zip_fopen_index(z, i, 0);
+			if (f) {
+				zip_fread(f, contents, sb.size);
+				zip_fclose(f);
+			}
+
+			std::ofstream(rootdir / "pwads" / outname).write(contents, sb.size);
+			delete[] contents;
+		}
+		zip_close(z);
 		std::filesystem::remove(temp_output);
 	}
 
@@ -148,8 +249,6 @@ class GZDoomInstancer {
 				(std::filesystem::status(gzdoom_path).permissions() &
 				std::filesystem::perms::owner_exec)) return;
 		if (fork() == 0) {
-			std::vector<path> pwad_paths;
-			path iwad_path;
 			load_instance();
 			path save_path = instance_path / "save";
 			path config_path = instance_path / "config";
@@ -218,6 +317,13 @@ class GZDoomInstancer {
 		path& path_selected = paths[index];
 		std::ptrdiff_t offset = path_selected.string().length() -
 			path_selected.filename().string().length();
+		if (path_selected.filename().string().length() == 0) {
+			std::string path_string = path_selected.string();
+			while (path_string.find("/") != path_string.size()-1) {
+				path_string = path_string.substr(path_string.find("/")+1);
+			}
+			offset = path_selected.string().length() - path_string.length();
+		}
 		return path_selected.c_str() + offset;
 	}
 
@@ -272,7 +378,6 @@ class GZDoomInstancer {
 		for (path pwad : pwad_paths) {
 			j["pwad_paths"].push_back(pwad);
 		}
-		std::cout << j << std::endl;
 		o << j << std::endl;
 		o.flush();
 		o.close();
@@ -300,7 +405,7 @@ class GZDoomInstancer {
 		ImVec2 size = ImGui::GetContentRegionAvail();
 		size.y -= ImGui::GetTextLineHeightWithSpacing();
 
-		ImGui::BeginTable("##", 2, ImGuiTableFlags_BordersInnerV |
+		ImGui::BeginTable("##0", 2, ImGuiTableFlags_BordersInnerV |
 				ImGuiTableFlags_RowBg |
 				ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
 				size);
@@ -394,7 +499,7 @@ class GZDoomInstancer {
 		ImVec2 size = ImGui::GetContentRegionAvail();
 		size.y -= ImGui::GetTextLineHeightWithSpacing();
 
-		ImGui::BeginTable("##", 1, ImGuiTableFlags_BordersInnerV |
+		ImGui::BeginTable("##1", 1, ImGuiTableFlags_BordersInnerV |
 				ImGuiTableFlags_RowBg |
 				ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
 				size);
@@ -445,9 +550,10 @@ class GZDoomInstancer {
 
 		ImGui::NewLine();
 
-		ImGui::InputText("IDGames File", current_idgames_file, 64);
-		if (ImGui::Button("Download PWAD"))
-			download_idgames();
+		if (ImGui::Button("IDGames Downloader")) {
+			current_view = IDGAMES_VIEW;
+			pinged_api_recently = false;
+		}
 
 		ImGui::NewLine();
 
@@ -495,6 +601,8 @@ class GZDoomInstancer {
 			current_view = MANAGER_LAUNCHER_VIEW;
 		}
 
+		ImGui::SameLine();
+
 		if (ImGui::Button("Apply")) {
 			path target_instance = available_instance_paths[current_instance_index]; 
 			memset(new_instance_name, 0, sizeof(new_instance_name));
@@ -514,7 +622,65 @@ class GZDoomInstancer {
 		ImGui::EndTable();
 
 		ImGui::Text("%s", signature());
+	}
 
+	void idgames_view() {
+		if (!pinged_api_recently) {
+			api_ping_result = iga_ping();
+			pinged_api_recently = true;
+		}
+		ImVec2 size = ImGui::GetContentRegionAvail();
+		size.y -= ImGui::GetTextLineHeightWithSpacing();
+
+		ImGui::BeginTable("##2", 1, ImGuiTableFlags_BordersInnerV |
+				ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable,
+				size);
+		ImGui::TableSetupColumn("IDGames Download");
+		ImGui::TableHeadersRow();
+
+		ImGui::TableNextColumn();
+
+		if (api_ping_result && pinged_api_recently) {
+			if (!obtained_files) {
+				current_idgames_index = 0;
+				current_idgames_path = "";
+				available_idgames_paths = {};
+				for (path idgames_path : iga_getdirs())
+					available_idgames_paths.push_back(idgames_path);
+				for (path idgames_path : iga_getfiles())
+					available_idgames_paths.push_back(idgames_path);
+				obtained_files = true;
+			}
+			ImGui::ListBox("Files", &current_idgames_index, path_string_getter,
+					available_idgames_paths.data(), available_idgames_paths.size());
+			if (ImGui::Button("Select")) {
+				if (available_idgames_paths.size() > current_idgames_index &&
+						available_idgames_paths[current_idgames_index].filename().empty()) {
+					if (available_idgames_paths[current_idgames_index] == "../") {
+						current_idgames_path =
+							current_idgames_path.parent_path().parent_path();
+						if (!current_idgames_path.empty()) current_idgames_path += "/";
+					} else current_idgames_path =
+							available_idgames_paths[current_idgames_index];
+					available_idgames_paths.clear();
+					if (!current_idgames_path.empty())
+						available_idgames_paths.push_back("../");
+					for (path idgames_path : iga_getdirs())
+						available_idgames_paths.push_back(idgames_path);
+					for (path idgames_path : iga_getfiles()) {
+						available_idgames_paths.push_back(idgames_path);
+					}
+				} else {
+					iga_downloadfile(available_idgames_paths[current_idgames_index]);
+					available_pwad_paths = list_available_pwads();
+				}
+			}
+		} else ImGui::TextWrapped("Failed to connect to Doomworld IDGames API." \
+					"Check your network settings or try again later.");
+		if (ImGui::Button("Return")) current_view = EDITOR_VIEW;
+
+		ImGui::EndTable();
 	}
 
 	void process() {
@@ -527,10 +693,13 @@ class GZDoomInstancer {
 
 		switch (current_view) {
 		case MANAGER_LAUNCHER_VIEW:
-			editor_view();
+			manager_launcher_view();
 			break;
 		case EDITOR_VIEW:
-			manager_launcher_view();
+			editor_view();
+			break;
+		case IDGAMES_VIEW:
+			idgames_view();
 			break;
 		default:
 			ImGui::TextWrapped("\"You picked a bad time to get lost, friend!\"");
@@ -552,10 +721,12 @@ class GZDoomInstancer {
 	std::vector<std::pair<path, bool>> available_pwad_paths;
 	std::vector<path> available_instance_paths;
 	std::vector<path> available_iwad_paths;
+	std::vector<path> available_idgames_paths;
 	path gzdoom_path;
+	std::string api_url;
+	std::string api_filename;
 
 	char new_instance_name[32];
-	char current_idgames_file[64];
 
 	int last_instance_index = -1;
 	int current_instance_index = 0;
@@ -563,10 +734,39 @@ class GZDoomInstancer {
 
 	bool close_on_launch = false;
 
+	bool pinged_api_recently = false;
+	bool api_ping_result = false;
+
+	bool obtained_files = false;
+	int current_idgames_index = 0;
+	path current_idgames_path;
+
 	enum VIEW {
 		MANAGER_LAUNCHER_VIEW,
-		EDITOR_VIEW
+		EDITOR_VIEW,
+		IDGAMES_VIEW,
 	} current_view = MANAGER_LAUNCHER_VIEW;
+
+	struct memory_chunk {
+		char* data;
+		std::size_t size;
+	};
+
+	void iga_prepare_curl(const char* url, CURL* curl, memory_chunk** chunk) {
+		*chunk = new memory_chunk{
+			.data = (char*)malloc(1),
+			.size = 0
+		};
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+		curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_MAX_TLSv1_2);
+
+		curl_easy_setopt(curl, CURLOPT_USERAGENT,
+			"GZDoomInstancer/0.3 (https://www.github.com/timerunner16)");
+
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_memory_cb);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)*chunk);
+	}
 };
 
 int main(int argc, char** argv) {

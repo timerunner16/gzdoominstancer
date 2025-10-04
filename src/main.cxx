@@ -22,6 +22,16 @@ typedef std::filesystem::path path;
 
 class GZDoomInstancer {
 	public:
+	struct iga_details_t {
+		bool discovered;
+		std::string filename;
+		std::string name;
+		std::size_t id;
+		std::string description;
+		unsigned int rating;
+		unsigned int votes;
+	};
+
 	GZDoomInstancer() {
 		rootdir =
 			path(getenv("HOME")) /
@@ -40,6 +50,7 @@ class GZDoomInstancer {
 		iwad_path = "";
 		pwad_paths = {};
 		current_idgames_path = "";
+		current_idgames_details = {.discovered=false};
 		available_pwad_paths = list_available_pwads();
 		available_instance_paths = list_instances();
 		available_iwad_paths = list_iwads();
@@ -140,7 +151,6 @@ class GZDoomInstancer {
 		std::string result = std::string(chunk->data);
 		try {
 			json j = json::parse(result);
-			std::cout << j.dump(4) << std::endl;
 
 			free(chunk->data);
 			delete chunk;
@@ -210,6 +220,36 @@ class GZDoomInstancer {
 			paths.push_back(path(result["dir"]) / path(result["filename"]));
 		}
 		return paths;
+	}
+
+	iga_details_t iga_getdetails(path filename) {
+		CURL* curl = curl_easy_init();
+		if (!curl) return {.discovered = false};
+		CURLcode res;
+		memory_chunk* chunk;
+		std::string full_url = api_url + api_filename + "?action=get&out=json&file=" +
+			filename.generic_string();
+		iga_prepare_curl(full_url.c_str(), curl, &chunk);
+
+		res = curl_easy_perform(curl);
+
+		if (res != CURLE_OK) return {.discovered = false};
+		std::string result = std::string(chunk->data);
+		json j = json::parse(result);
+
+		free(chunk->data);
+		delete chunk;
+		curl_easy_cleanup(curl);
+
+		return {
+			.discovered = true,
+			.filename = j["content"]["filename"],
+			.name = j["content"]["title"],
+			.id = j["content"]["id"],
+			.description = j["content"]["description"],
+			.rating = j["content"]["rating"],
+			.votes = j["content"]["votes"]
+		};
 	}
 
 	void iga_downloadfile(path filename) {
@@ -672,6 +712,22 @@ class GZDoomInstancer {
 			}
 			ImGui::ListBox("Files", &current_idgames_index, path_string_getter,
 					available_idgames_paths.data(), available_idgames_paths.size());
+			if (current_idgames_index != previous_idgames_index) {
+				if (!available_idgames_paths[current_idgames_index].filename().empty())
+					current_idgames_details =
+						iga_getdetails(available_idgames_paths[current_idgames_index]);
+				else current_idgames_details.discovered = false;
+				previous_idgames_index = current_idgames_index;
+			}
+			if (current_idgames_details.discovered)
+				ImGui::TextWrapped("Name: %s\nFilename: %s\nID: %zu\n" \
+						"Description: %s\nRating:%u/5 (%u votes)",
+						current_idgames_details.name.c_str(),
+						current_idgames_details.filename.c_str(),
+						current_idgames_details.id,
+						current_idgames_details.description.c_str(),
+						current_idgames_details.rating,
+						current_idgames_details.votes);
 			if (ImGui::Button("Select")) {
 				if (available_idgames_paths.size() > current_idgames_index &&
 						available_idgames_paths[current_idgames_index].filename().empty()) {
@@ -693,6 +749,7 @@ class GZDoomInstancer {
 					iga_downloadfile(available_idgames_paths[current_idgames_index]);
 					available_pwad_paths = list_available_pwads();
 				}
+				current_idgames_index = 0;
 			}
 		} else ImGui::TextWrapped("Failed to connect to Doomworld IDGames API." \
 					"Check your network settings or try again later.");
@@ -757,7 +814,9 @@ class GZDoomInstancer {
 
 	bool obtained_files = false;
 	int current_idgames_index = 0;
+	int previous_idgames_index = -1;
 	path current_idgames_path;
+	iga_details_t current_idgames_details;
 
 	enum VIEW {
 		MANAGER_LAUNCHER_VIEW,

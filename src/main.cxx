@@ -588,6 +588,18 @@ class GZDoomInstancer {
 			add_pwad();
 			available_pwad_paths = list_available_pwads();
 		}
+		if (ImGui::Button("Delete Selected PWADs")) {
+			pfd::message message("WARNING!",
+					"Really delete selected PWADs? This is not reversible!",
+					pfd::choice::ok_cancel, pfd::icon::warning);
+			if (message.result() == pfd::button::ok) {
+				for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
+					if (!available_pwad_path.second) continue;
+					std::filesystem::remove(available_pwad_path.first);
+				}
+			}
+			available_pwad_paths = list_available_pwads();
+		}
 		if (ImGui::Button("Activate Selected PWADs")) {
 			for (std::pair<path, bool> available_pwad_path : available_pwad_paths) {
 				if (!available_pwad_path.second) continue;
